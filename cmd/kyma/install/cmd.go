@@ -50,16 +50,17 @@ type command struct {
 type clusterInfo struct {
 	isLocal       bool
 	provider      string
+	profile       string
 	localIP       string
 	localVMDriver string
 }
 
 const (
-	sleep                       = 10 * time.Second
-	releaseSrcUrlPattern        = "https://raw.githubusercontent.com/kyma-project/kyma/%s/%s"
-	releaseResourcePattern      = "https://raw.githubusercontent.com/kyma-project/kyma/%s/installation/resources/%s"
-	registryImagePattern = "eu.gcr.io/kyma-project/kyma-installer:%s"
-	localDomain                 = "kyma.local"
+	sleep                  = 10 * time.Second
+	releaseSrcUrlPattern   = "https://raw.githubusercontent.com/kyma-project/kyma/%s/%s"
+	releaseResourcePattern = "https://raw.githubusercontent.com/kyma-project/kyma/%s/installation/resources/%s"
+	registryImagePattern   = "eu.gcr.io/kyma-project/kyma-installer:%s"
+	localDomain            = "kyma.local"
 )
 
 //NewCmd creates a new kyma command
@@ -88,39 +89,26 @@ Here are the installation steps:
 The standard installation uses the minimal configuration. The system performs the following steps:
 1. Fetches the ` + "`tiller.yaml`" + ` file from the ` + "`/installation/resources`" + ` directory and deploys it to the cluster.
 2. Deploys and configures the Kyma Installer. At this point, steps differ depending on the installation type.
-    <div tabs name="installation">
-    <details>
-    <summary>
-    From release
-    </summary>
 
-    When you install Kyma locally from release, the system:
+    When you install Kyma locally ` + "**from release**" + `, the system:
     1. Fetches the latest or specified release along with configuration.
     2. Deploys the Kyma Installer on the cluster.
     3. Applies downloaded or defined configuration.
     4. Applies overrides, if applicable.
     5. Sets the admin password.
     6. Patches the Minikube IP.
-    </details>
-    <details>
-    <summary>
-    From sources
-    </summary>
-    
-    When you install Kyma locally from sources, the system:
+	
+    When you install Kyma locally ` + "**from sources**" + `, the system:
     1. Fetches the configuration yaml files from the local sources.
     2. Builds the Kyma Installer image.
     3. Deploys the Kyma Installer and applies the fetched configuration.
     4. Applies overrides, if applicable.
     5. Sets the admin password.
     6. Patches the Minikube IP.
-    </details>
-    </div>
+    
 3. Configures Helm. If installed, Helm is automatically configured using certificates from Tiller. This step is optional.
-4. Runs Kyma installation until the ` + "**installed**" + ` status confirms the successful installation.
-	> **NOTE**: You can override the standard installation settings using the ` + "`--override`" + ` flag.
+4. Runs Kyma installation until the ` + "**installed**" + ` status confirms the successful installation. You can override the standard installation settings using the ` + "`--override`" + ` flag.
 
-### Usage
 `,
 		RunE:    func(_ *cobra.Command, _ []string) error { return cmd.Run() },
 		Aliases: []string{"i"},
@@ -130,9 +118,9 @@ The standard installation uses the minimal configuration. The system performs th
 	cobraCmd.Flags().StringVarP(&o.Domain, "domain", "d", localDomain, "Specifies the domain used for installation.")
 	cobraCmd.Flags().StringVarP(&o.TLSCert, "tlsCert", "", "", "Specifies the TLS certificate for the domain used for installation.")
 	cobraCmd.Flags().StringVarP(&o.TLSKey, "tlsKey", "", "", "Specifies the TLS key for the domain used for installation.")
-	cobraCmd.Flags().StringVarP(&o.Source, "source", "s", DefaultKymaVersion, "Specifies the installation source. To use the specific release, write kyma install --source=1.3.0. To use the latest master, write kyma install --source=latest. To use the local sources, write kyma install --source=local. To use the remote image, write kyma install --source=user/my-kyma-installer:v1.4.0")
+	cobraCmd.Flags().StringVarP(&o.Source, "source", "s", DefaultKymaVersion, "Specifies the installation source. To use the specific release, write kyma install --source=1.3.0. To use the latest master, write kyma install --source=latest. To use the local sources, write kyma install --source=local. To use the remote image, write kyma install --source=user/my-kyma-installer:v1.4.0.")
 	cobraCmd.Flags().StringVarP(&o.LocalSrcPath, "src-path", "", "", "Specifies the absolute path to local sources.")
-	cobraCmd.Flags().DurationVarP(&o.Timeout, "timeout", "", 30*time.Minute, "Time-out after which CLI stops watching the installation progress")
+	cobraCmd.Flags().DurationVarP(&o.Timeout, "timeout", "", 30*time.Minute, "Time-out after which CLI stops watching the installation progress.")
 	cobraCmd.Flags().StringVarP(&o.Password, "password", "p", "", "Specifies the predefined cluster password.")
 	cobraCmd.Flags().VarP(&o.OverrideConfigs, "override", "o", "Specifies the path to a yaml file with parameters to override.")
 	cobraCmd.Flags().Bool("help", false, "Displays help for the command.")
@@ -185,7 +173,7 @@ func (cmd *command) Run() error {
 	s.Successf("Cluster info read")
 
 	s = cmd.NewStep("Loading installation files")
-	resources, err := cmd.loadAndConfigureInstallationFiles(clusterConfig.isLocal)
+	resources, err := cmd.loadAndConfigureInstallationFiles(clusterConfig)
 	if err != nil {
 		s.Failure()
 		return err
@@ -245,7 +233,7 @@ func (cmd *command) Run() error {
 
 	if clusterConfig.isLocal {
 		s = cmd.NewStep("Adding domains to /etc/hosts")
-		err = cmd.addDevDomainsToEtcHosts(s, clusterConfig.localIP, clusterConfig.localVMDriver)
+		err = cmd.addDevDomainsToEtcHosts(s, clusterConfig)
 		if err != nil {
 			s.Failure()
 			return err
@@ -506,9 +494,9 @@ func (cmd *command) replaceDockerImageURL(resources []map[string]interface{}, im
 	return nil, errors.New("unable to find 'image' field for kyma installer 'Deployment'")
 }
 
-func (cmd *command) loadAndConfigureInstallationFiles(isLocalInstallation bool) ([]map[string]interface{}, error) {
+func (cmd *command) loadAndConfigureInstallationFiles(clusterInfo clusterInfo) ([]map[string]interface{}, error) {
 	var installationFiles []string
-	if isLocalInstallation {
+	if clusterInfo.isLocal {
 		installationFiles = []string{"installer-local.yaml", "installer-config-local.yaml.tpl", "installer-cr.yaml.tpl"}
 	} else {
 		installationFiles = []string{"installer.yaml", "installer-cr-cluster.yaml.tpl"}
@@ -530,7 +518,7 @@ func (cmd *command) loadAndConfigureInstallationFiles(isLocalInstallation bool) 
 			return nil, err
 		}
 
-		err = cmd.buildKymaInstaller(imageName)
+		err = cmd.buildKymaInstaller(imageName, clusterInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -657,8 +645,8 @@ func (cmd *command) loadInstallationResourceFiles(resourcePaths []string, fromLo
 	return resources, nil
 }
 
-func (cmd *command) buildKymaInstaller(imageName string) error {
-	dc, err := minikube.DockerClient(cmd.opts.Verbose)
+func (cmd *command) buildKymaInstaller(imageName string, clusterInfo clusterInfo) error {
+	dc, err := minikube.DockerClient(cmd.opts.Verbose, clusterInfo.profile)
 	if err != nil {
 		return err
 	}
@@ -993,10 +981,10 @@ func (cmd *command) importCertificate(ca trust.Certifier) error {
 	return nil
 }
 
-func (cmd *command) addDevDomainsToEtcHosts(s step.Step, IP string, VMDriver string) error {
+func (cmd *command) addDevDomainsToEtcHosts(s step.Step, clusterInfo clusterInfo) error {
 	hostnames := ""
 
-	vsList, err := cmd.K8s.Istio().NetworkingV1alpha3().VirtualServices("kyma-system").List(metav1.ListOptions{})
+	vsList, err := cmd.K8s.Istio().NetworkingV1alpha3().VirtualServices("").List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -1009,14 +997,14 @@ func (cmd *command) addDevDomainsToEtcHosts(s step.Step, IP string, VMDriver str
 
 	hostAlias := "127.0.0.1" + hostnames
 
-	if VMDriver != "none" {
-		_, err := minikube.RunCmd(cmd.opts.Verbose, "ssh", "sudo /bin/sh -c 'echo \""+hostAlias+"\" >> /etc/hosts'")
+	if clusterInfo.localVMDriver != "none" {
+		_, err := minikube.RunCmd(cmd.opts.Verbose, clusterInfo.profile, "ssh", "sudo /bin/sh -c 'echo \""+hostAlias+"\" >> /etc/hosts'")
 		if err != nil {
 			return err
 		}
 	}
 
-	hostAlias = strings.Trim(IP, "\n") + hostnames
+	hostAlias = strings.Trim(clusterInfo.localIP, "\n") + hostnames
 
 	return addDevDomainsToEtcHostsOSSpecific(cmd.opts.Domain, s, hostAlias)
 }
@@ -1038,6 +1026,7 @@ func (cmd *command) getClusterInfoFromConfigMap() (clusterInfo, error) {
 	clusterConfig := clusterInfo{
 		isLocal:       isLocal,
 		provider:      cm.Data["provider"],
+		profile:       cm.Data["profile"],
 		localIP:       cm.Data["localIP"],
 		localVMDriver: cm.Data["localVMDriver"],
 	}
@@ -1065,7 +1054,27 @@ func (cmd *command) patchMinikubeIP(minikubeIP string) error {
 }
 
 func (cmd *command) createOwnDomainConfigMap() error {
-	_, err := cmd.K8s.Static().CoreV1().ConfigMaps("kyma-installer").Create(&corev1.ConfigMap{
+	cm, err := cmd.K8s.Static().CoreV1().ConfigMaps("kyma-installer").Get("owndomain-overrides", metav1.GetOptions{})
+	if err == nil && cm != nil {
+		fmt.Println("ConfigMap already exists")
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data["global.domainName"] = cmd.opts.Domain
+		cm.Data["global.tlsCrt"] = cmd.opts.TLSCert
+		cm.Data["global.tlsKey"] = cmd.opts.TLSKey
+
+		_, err = cmd.K8s.Static().CoreV1().ConfigMaps("kyma-installer").Update(cm)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	} else if err != nil && !strings.Contains(err.Error(), "not found") {
+		return err
+	}
+
+	_, err = cmd.K8s.Static().CoreV1().ConfigMaps("kyma-installer").Create(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "owndomain-overrides",
 			Labels: map[string]string{"installer": "overrides"},
